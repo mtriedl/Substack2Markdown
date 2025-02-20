@@ -1,26 +1,27 @@
 import argparse
 import json
 import os
+import re
 from abc import ABC, abstractmethod
-from typing import List, Optional, Tuple
 from time import sleep
 
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 import html2text
 import markdown
 import requests
+from selenium.webdriver.common.by import By
 from tqdm import tqdm
+import undetected_chromedriver as uc
+from urllib.parse import urlparse
 from xml.etree import ElementTree as ET
 
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from webdriver_manager.microsoft import EdgeChromiumDriverManager
-from selenium.webdriver.edge.options import Options as EdgeOptions
-from selenium.webdriver.chrome.service import Service
-from urllib.parse import urlparse
-from config import EMAIL, PASSWORD
+
+load_dotenv('.env')
+
 
 USE_PREMIUM: bool = False  # Set to True if you want to login to Substack and convert paid for posts
+OVERWRITE_EXISTING_FILES: bool = True # Whether existing files should be overwritten
 BASE_SUBSTACK_URL: str = "https://www.thefitzwilliam.com/"  # Substack you want to convert to markdown
 BASE_MD_DIR: str = "substack_md_files"  # Name of the directory we'll save the .md essay files
 BASE_HTML_DIR: str = "substack_html_pages"  # Name of the directory we'll save the .html essay files
@@ -85,10 +86,10 @@ class BaseSubstackScraper(ABC):
             os.makedirs(self.html_save_dir)
             print(f"Created html directory {self.html_save_dir}")
 
-        self.keywords: List[str] = ["about", "archive", "podcast"]
-        self.post_urls: List[str] = self.get_all_post_urls()
+        self.keywords: list[str] = ["about", "archive", "podcast"]
+        self.post_urls: list[str] = self.get_all_post_urls()
 
-    def get_all_post_urls(self) -> List[str]:
+    def get_all_post_urls(self) -> list[str]:
         """
         Attempts to fetch URLs from sitemap.xml, falling back to feed.xml if necessary.
         """
@@ -97,7 +98,7 @@ class BaseSubstackScraper(ABC):
             urls = self.fetch_urls_from_feed()
         return self.filter_urls(urls, self.keywords)
 
-    def fetch_urls_from_sitemap(self) -> List[str]:
+    def fetch_urls_from_sitemap(self) -> list[str]:
         """
         Fetches URLs from sitemap.xml.
         """
@@ -112,7 +113,7 @@ class BaseSubstackScraper(ABC):
         urls = [element.text for element in root.iter('{http://www.sitemaps.org/schemas/sitemap/0.9}loc')]
         return urls
 
-    def fetch_urls_from_feed(self) -> List[str]:
+    def fetch_urls_from_feed(self) -> list[str]:
         """
         Fetches URLs from feed.xml.
         """
@@ -134,7 +135,7 @@ class BaseSubstackScraper(ABC):
         return urls
 
     @staticmethod
-    def filter_urls(urls: List[str], keywords: List[str]) -> List[str]:
+    def filter_urls(urls: list[str], keywords: list[str]) -> list[str]:
         """
         This method filters out URLs that contain certain keywords
         """
@@ -163,7 +164,7 @@ class BaseSubstackScraper(ABC):
         if not isinstance(content, str):
             raise ValueError("content must be a string")
 
-        if os.path.exists(filepath):
+        if os.path.exists(filepath) and not OVERWRITE_EXISTING_FILES:
             print(f"File already exists: {filepath}")
             return
 
@@ -248,31 +249,40 @@ class BaseSubstackScraper(ABC):
 
         return metadata + content
 
-    def extract_post_data(self, soup: BeautifulSoup) -> Tuple[str, str, str, str, str]:
+    def extract_post_data(self, soup: BeautifulSoup) -> tuple[str, str, str, str, str]:
         """
         Converts substack post soup to markdown, returns metadata and content
         """
-        title = soup.select_one("h1.post-title, h2").text.strip()  # When a video is present, the title is demoted to h2
+        try:
+            title = soup.select_one("h1.post-title, h2").text.strip()  # When a video is present, the title is demoted to h2
 
-        subtitle_element = soup.select_one("h3.subtitle")
-        subtitle = subtitle_element.text.strip() if subtitle_element else ""
+            subtitle_element = soup.select_one("h3.subtitle")
+            subtitle = subtitle_element.text.strip() if subtitle_element else ""
 
-        date_element = soup.find(
-            "div",
-            class_="pencraft pc-reset _color-pub-secondary-text_3axfk_207 _line-height-20_3axfk_95 _font-meta_3axfk_131 _size-11_3axfk_35 _weight-medium_3axfk_162 _transform-uppercase_3axfk_242 _reset_3axfk_1 _meta_3axfk_442"
-        )
-        date = date_element.text.strip() if date_element else "Date not found"
+            # extract first matching date from article
+            article_text = soup.find("article").text[:1000]
+            pattern = (
+                r"(Jan(uary)?|Feb(ruary)?|Mar(ch)?|Apr(il)?|May|Jun(e)?|"
+                r"Jul(y)?|Aug(ust)?|Sep(tember)?|Oct(ober)?|Nov(ember)?|"
+                r"Dec(ember)?)\s+\d{1,2},?\s+\d{4}"
+            )
+            date_match = re.search(pattern, article_text)
+            date = date_match[0] if date_match else "Date not found"
 
-        like_count_element = soup.select_one("a.post-ufi-button .label")
-        like_count = (
-            like_count_element.text.strip()
-            if like_count_element and like_count_element.text.strip().isdigit()
-            else "0"
-        )
+            like_count_element = soup.select_one("a.post-ufi-button .label")
+            like_count = (
+                like_count_element.text.strip()
+                if like_count_element and like_count_element.text.strip().isdigit()
+                else "0"
+            )
 
-        content = str(soup.select_one("div.available-content"))
-        md = self.html_to_md(content)
-        md_content = self.combine_metadata_and_content(title, subtitle, date, like_count, md)
+            content = str(soup.select_one("div.available-content"))
+            md = self.html_to_md(content)
+            md_content = self.combine_metadata_and_content(title, subtitle, date, like_count, md)
+
+        except Exception as e:
+            raise ValueError('Error extracting post data') from e
+
         return title, subtitle, like_count, date, md_content
 
     @abstractmethod
@@ -302,40 +312,52 @@ class BaseSubstackScraper(ABC):
         essays_data = []
         count = 0
         total = num_posts_to_scrape if num_posts_to_scrape != 0 else len(self.post_urls)
-        for url in tqdm(self.post_urls, total=total):
+        for url in tqdm(self.post_urls, initial=1, total=total):
             try:
                 md_filename = self.get_filename_from_url(url, filetype=".md")
                 html_filename = self.get_filename_from_url(url, filetype=".html")
                 md_filepath = os.path.join(self.md_save_dir, md_filename)
                 html_filepath = os.path.join(self.html_save_dir, html_filename)
 
-                if not os.path.exists(md_filepath):
-                    soup = self.get_url_soup(url)
-                    if soup is None:
-                        total += 1
-                        continue
-                    title, subtitle, like_count, date, md = self.extract_post_data(soup)
-                    self.save_to_file(md_filepath, md)
-
-                    # Convert markdown to HTML and save
-                    html_content = self.md_to_html(md)
-                    self.save_to_html_file(html_filepath, html_content)
-
-                    essays_data.append({
-                        "title": title,
-                        "subtitle": subtitle,
-                        "like_count": like_count,
-                        "date": date,
-                        "file_link": md_filepath,
-                        "html_link": html_filepath
-                    })
-                else:
+                if os.path.exists(md_filepath) and not OVERWRITE_EXISTING_FILES:
                     print(f"File already exists: {md_filepath}")
+                    continue
+
+                soup = self.get_url_soup(url)
+                if soup is None:
+                    total += 1
+                    continue
+
+                try:
+                    title, subtitle, like_count, date, md = self.extract_post_data(soup)
+                except ValueError as e:
+                    print(e)
+                    continue
+                self.save_to_file(md_filepath, md)
+
+                # Convert markdown to HTML and save
+                html_content = self.md_to_html(md)
+                self.save_to_html_file(html_filepath, html_content)
+
+                essays_data.append({
+                    "title": title,
+                    "subtitle": subtitle,
+                    "like_count": like_count,
+                    "date": date,
+                    "file_link": md_filepath,
+                    "html_link": html_filepath
+                })
+
             except Exception as e:
                 print(f"Error scraping post: {e}")
-            count += 1
+
+            # only count succesful downloads
+            else:
+                count += 1
+
             if num_posts_to_scrape != 0 and count == num_posts_to_scrape:
                 break
+
         self.save_essays_data_to_json(essays_data=essays_data)
         generate_html_file(author_name=self.writer_name)
 
@@ -344,7 +366,7 @@ class SubstackScraper(BaseSubstackScraper):
     def __init__(self, base_substack_url: str, md_save_dir: str, html_save_dir: str):
         super().__init__(base_substack_url, md_save_dir, html_save_dir)
 
-    def get_url_soup(self, url: str) -> Optional[BeautifulSoup]:
+    def get_url_soup(self, url: str) -> BeautifulSoup | None:
         """
         Gets soup from URL using requests
         """
@@ -366,26 +388,10 @@ class PremiumSubstackScraper(BaseSubstackScraper):
             md_save_dir: str,
             html_save_dir: str,
             headless: bool = False,
-            edge_path: str = '',
-            edge_driver_path: str = '',
-            user_agent: str = ''
     ) -> None:
         super().__init__(base_substack_url, md_save_dir, html_save_dir)
 
-        options = EdgeOptions()
-        if headless:
-            options.add_argument("--headless")
-        if edge_path:
-            options.binary_location = edge_path
-        if user_agent:
-            options.add_argument(f'user-agent={user_agent}')  # Pass this if running headless and blocked by captcha
-
-        if edge_driver_path:
-            service = Service(executable_path=edge_driver_path)
-        else:
-            service = Service(EdgeChromiumDriverManager().install())
-
-        self.driver = webdriver.Edge(service=service, options=options)
+        self.driver = uc.Chrome(headless=headless, use_subprocess=False)
         self.login()
 
     def login(self) -> None:
@@ -404,13 +410,13 @@ class PremiumSubstackScraper(BaseSubstackScraper):
         # Email and password
         email = self.driver.find_element(By.NAME, "email")
         password = self.driver.find_element(By.NAME, "password")
-        email.send_keys(EMAIL)
-        password.send_keys(PASSWORD)
+        email.send_keys(os.getenv('EMAIL'))
+        password.send_keys(os.getenv('PASSWORD'))
 
         # Find the submit button and click it.
         submit = self.driver.find_element(By.XPATH, "//*[@id=\"substack-login\"]/div[2]/div[2]/form/button")
         submit.click()
-        sleep(30)  # Wait for the page to load
+        sleep(10)  # Wait for the page to load
 
         if self.is_login_failed():
             raise Exception(

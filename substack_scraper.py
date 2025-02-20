@@ -20,14 +20,14 @@ from xml.etree import ElementTree as ET
 load_dotenv('.env')
 
 
-USE_PREMIUM: bool = False  # Set to True if you want to login to Substack and convert paid for posts
+USE_PREMIUM: bool = True # Set to True if you want to login to Substack and convert paid for posts
 OVERWRITE_EXISTING_FILES: bool = True # Whether existing files should be overwritten
-BASE_SUBSTACK_URL: str = 'https://www.thefitzwilliam.com/'  # Substack you want to convert to markdown
+BASE_SUBSTACK_URL: str = 'https://mindsetjournal.substack.com/' # Substack you want to convert to markdown
 BASE_MD_DIR: str = 'substack_md_files'  # Name of the directory we'll save the .md essay files
 BASE_HTML_DIR: str = 'substack_html_pages'  # Name of the directory we'll save the .html essay files
 HTML_TEMPLATE: str = 'author_template.html'  # HTML template to use for the author page
 JSON_DATA_DIR: str = 'data'
-NUM_POSTS_TO_SCRAPE: int = 3  # Set to 0 if you want all posts
+NUM_POSTS_TO_SCRAPE: int = 0 # Set to 0 if you want all posts
 
 
 def extract_main_part(url: str) -> str:
@@ -474,25 +474,6 @@ def parse_args() -> argparse.Namespace:
         'Scraper.',
     )
     parser.add_argument(
-        '--edge-path',
-        type=str,
-        default="",
-        help="Optional: The path to the Edge browser executable (i.e. 'path_to_msedge.exe').",
-    )
-    parser.add_argument(
-        '--edge-driver-path',
-        type=str,
-        default="",
-        help="Optional: The path to the Edge WebDriver executable (i.e. 'path_to_msedgedriver.exe').",
-    )
-    parser.add_argument(
-        '--user-agent',
-        type=str,
-        default="",
-        help='Optional: Specify a custom user agent for selenium browser automation. Useful for '
-        'passing captcha in headless mode',
-    )
-    parser.add_argument(
         '--html-directory',
         type=str,
         help='The directory to save scraped posts as HTML files.',
@@ -532,8 +513,6 @@ def main():
                 base_substack_url=BASE_SUBSTACK_URL,
                 md_save_dir=args.directory,
                 html_save_dir=args.html_directory,
-                edge_path=args.edge_path,
-                edge_driver_path=args.edge_driver_path
             )
         else:
             scraper = SubstackScraper(
